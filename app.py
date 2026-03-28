@@ -281,7 +281,7 @@ with tab1:
                     "hourly_cost",
                 ]
             ],
-            use_container_width=True,
+            width=True,
             hide_index=True,
         )
 
@@ -310,7 +310,7 @@ with tab1:
             yaxis_title="",
             barmode="overlay",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width=True)
     else:
         st.info("No schedule.")
 
@@ -391,7 +391,7 @@ with tab3:
         "estimated_duration_h",
     ]
     show = wo[show_cols].sort_values("failure_risk", ascending=False)
-    st.dataframe(show, use_container_width=True, hide_index=True)
+    st.dataframe(show, width=True, hide_index=True)
 
     st.subheader("Proxy features → marina labels (model inputs)")
     st.table(

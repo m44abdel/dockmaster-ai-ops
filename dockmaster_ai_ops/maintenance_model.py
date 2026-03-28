@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import pickle
 from pathlib import Path
 
 import joblib
@@ -202,10 +203,45 @@ def train_failure_model(random_state: int = 42) -> dict:
     return payload
 
 
+def _model_file_looks_bad() -> bool:
+    """True if missing, empty, or implausibly small (corrupt git placeholder / partial write)."""
+    if not MODEL_PATH.exists():
+        return True
+    try:
+        return MODEL_PATH.stat().st_size < 256
+    except OSError:
+        return True
+
+
 def load_model() -> dict:
+    """
+    Load persisted risk model; if the file is missing, corrupt, or truncated (``EOFError`` on cloud
+    cold starts / incognito first hit), delete it and retrain once.
+    """
+    if _model_file_looks_bad():
+        try:
+            MODEL_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
     if not MODEL_PATH.exists():
         train_failure_model()
-    return joblib.load(MODEL_PATH)
+    try:
+        return joblib.load(MODEL_PATH)
+    except (EOFError, OSError, ValueError, pickle.UnpicklingError) as e:
+        logger.warning("Model load failed (%s), rebuilding: %s", type(e).__name__, e)
+        try:
+            MODEL_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
+        train_failure_model()
+        try:
+            return joblib.load(MODEL_PATH)
+        except Exception as e2:
+            logger.exception("Model still not loadable after retrain")
+            raise RuntimeError(
+                "Could not load the risk model after retraining. "
+                "Check app logs, network access (AI4I download), and disk space."
+            ) from e2
 
 
 def risk_scores_for_work_orders(X: pd.DataFrame) -> np.ndarray:
