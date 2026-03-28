@@ -1,0 +1,2 @@
+# Streamlit Community Cloud: use 3.11 wheels (avoid 3.14 + long pip backtracking).
+python-3.11

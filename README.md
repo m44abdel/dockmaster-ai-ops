@@ -31,4 +31,4 @@ Use **Retrain risk model** after changes.
 
 ## Stack
 
-Python 3.10+, scikit-learn, OR-Tools, Streamlit, Plotly.
+Python 3.10+, scikit-learn, OR-Tools, Streamlit, Plotly, Gemini.

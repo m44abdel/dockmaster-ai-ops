@@ -176,7 +176,7 @@ def optimize_schedule(
     model.Minimize(sum(obj_terms))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 45.0
+    solver.parameters.max_time_in_seconds = 10.0
     solver.parameters.random_seed = seed
     status = solver.Solve(model)
     status_name = solver.StatusName(status)
