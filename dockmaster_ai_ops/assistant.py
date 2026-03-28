@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import requests
 
 _DOTENV_LOADED = False
 
@@ -120,6 +121,53 @@ def _context_json_for_llm(context: dict[str, Any]) -> str:
     return json.dumps(context, indent=2, default=str)
 
 
+def _gemini_generate_rest(
+    prompt: str,
+    api_key: str,
+    model: str,
+    *,
+    temperature: float = 0.25,
+    max_output_tokens: int = 4096,
+    timeout: int = 120,
+) -> str:
+    """
+    Call Gemini ``generateContent`` over HTTPS (no ``google-generativeai`` SDK).
+
+    Avoids protobuf version clashes with ``ortools`` 9.15+ on Python 3.14+ build images.
+    """
+    key = api_key.strip()
+    mid = model.strip().removeprefix("models/")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{mid}:generateContent"
+    payload: dict[str, Any] = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+        },
+    }
+    r = requests.post(url, params={"key": key}, json=payload, timeout=timeout)
+    try:
+        data = r.json()
+    except Exception:
+        raise RuntimeError(f"Gemini returned non-JSON (HTTP {r.status_code}).") from None
+    if r.status_code != 200:
+        err = data.get("error", {}) if isinstance(data, dict) else {}
+        msg = err.get("message", r.text[:800])
+        raise RuntimeError(f"Gemini API HTTP {r.status_code}: {msg}")
+    cands = data.get("candidates") or []
+    if not cands:
+        pf = data.get("promptFeedback")
+        if pf:
+            raise RuntimeError(f"No candidates (promptFeedback): {pf}")
+        raise RuntimeError("No candidates in Gemini response.")
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    out = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    text = out.strip()
+    if not text:
+        raise RuntimeError("Empty text in Gemini response.")
+    return text
+
+
 def answer_question_from_context(
     user_question: str,
     context: dict[str, Any],
@@ -179,35 +227,17 @@ def answer_question_from_context(
 """
 
     try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key.strip())
-        mdl = genai.GenerativeModel(model)
-        resp = mdl.generate_content(
+        return _gemini_generate_rest(
             prompt,
-            generation_config={
-                "temperature": 0.25,
-                "max_output_tokens": 4096,
-            },
+            api_key.strip(),
+            model,
+            temperature=0.25,
+            max_output_tokens=4096,
         )
-        text = (getattr(resp, "text", None) or "").strip()
-        if not text and getattr(resp, "candidates", None):
-            try:
-                parts = resp.candidates[0].content.parts
-                text = "".join(getattr(p, "text", "") or "" for p in parts).strip()
-            except (IndexError, AttributeError, ValueError):
-                text = ""
-        return text if text else "No response text returned (blocked or empty). Rephrase or check API quota."
-    except ModuleNotFoundError as e:
-        if "generativeai" in str(e) or "google" in str(e):
-            return (
-                "**Missing package:** `google-generativeai` is not installed in the Python environment "
-                "running Streamlit.\n\n"
-                "In **that same environment**, run:\n\n"
-                "`pip install google-generativeai`\n\n"
-                "or `pip install -r requirements.txt`, then restart Streamlit."
-            )
-        return f"Assistant error (ModuleNotFoundError): {e!s}."
+    except requests.RequestException as e:
+        return f"Assistant error (network): {e!s}"
+    except RuntimeError as e:
+        return f"Assistant error: {e!s}"
     except Exception as e:
         return f"Assistant error ({type(e).__name__}): {e!s}. Check API key and model name."
 
@@ -642,25 +672,27 @@ def polish_with_gemini(
     """
     if not api_key or not str(api_key).strip():
         return draft_answer
+    _load_dotenv_from_project_root()
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    payload = json.dumps(facts, indent=2, default=str)
+    prompt = (
+        "You are DockMaster AI Ops Assistant.\n"
+        "Answer only using the facts provided below.\n"
+        "Do not invent missing information.\n"
+        "Be concise and operational (2–5 sentences).\n"
+        "Preserve all numeric values exactly as in the facts or draft.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Facts (JSON):\n{payload}\n\n"
+        f"Draft answer (must remain factually equivalent):\n{draft_answer}"
+    )
     try:
-        import google.generativeai as genai
-
-        _load_dotenv_from_project_root()
-        genai.configure(api_key=api_key.strip())
-        model = genai.GenerativeModel(os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
-        payload = json.dumps(facts, indent=2, default=str)
-        prompt = (
-            "You are DockMaster AI Ops Assistant.\n"
-            "Answer only using the facts provided below.\n"
-            "Do not invent missing information.\n"
-            "Be concise and operational (2–5 sentences).\n"
-            "Preserve all numeric values exactly as in the facts or draft.\n\n"
-            f"Question:\n{question}\n\n"
-            f"Facts (JSON):\n{payload}\n\n"
-            f"Draft answer (must remain factually equivalent):\n{draft_answer}"
+        text = _gemini_generate_rest(
+            prompt,
+            api_key.strip(),
+            model,
+            temperature=0.2,
+            max_output_tokens=1024,
         )
-        resp = model.generate_content(prompt)
-        text = (resp.text or "").strip()
         return text if text else draft_answer
     except Exception:
         return draft_answer

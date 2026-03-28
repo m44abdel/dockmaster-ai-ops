@@ -1,10 +1,4 @@
-# --- Pin these first (avoids 10+ minute pip backtracking on Streamlit Cloud) ---
-# ortools 9.15+ requires protobuf>=6.33; google-generativeai requires protobuf<6 — incompatible.
-# Use protobuf 5.x + ortools 9.10.x (CP-SAT API unchanged for this app).
-protobuf>=5.26.0,<6
-ortools==9.10.4067
-google-generativeai==0.8.6
-# ------------------------------------------------------------------------------
+ortools>=9.15.0,<10
 pandas>=2.0.0
 numpy>=1.24.0
 scikit-learn>=1.3.0
