@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from dockmaster_ai_ops.assistant import ensure_dotenv_loaded
+
+ensure_dotenv_loaded(ROOT)
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -31,6 +35,7 @@ from dockmaster_ai_ops.scenarios import apply_scenario
 from dockmaster_ai_ops.scheduler import estimate_backlog_improvement, optimize_schedule
 from dockmaster_ai_ops.technicians import generate_technician_roster
 from dockmaster_ai_ops.work_orders import enrich_work_orders, random_work_orders
+from dockmaster_ai_ops import assistant as dm_assistant
 
 st.set_page_config(
     page_title="DockMaster AI Ops",
@@ -117,8 +122,114 @@ kpi_fcfs = extended_business_kpis(
 
 merged_export = sched.merge(wo, on="work_order_id", how="left", suffixes=("_sched", ""))
 
+# --- Grounded assistant context (floating dialog; available from any tab) ---
+baseline_bundle = {
+    "vs_fcfs_weighted_completion_improve_pct": float(cmp_fcfs["weighted_completion_improve_pct"]),
+    "vs_fcfs_overdue_count_reduction_pct": float(cmp_fcfs["overdue_count_reduction_pct"]),
+    "vs_fcfs_high_risk_sooner_pct": float(cmp_fcfs["high_risk_sooner_pct"]),
+    "baseline_overdue": float(cmp_fcfs["baseline_overdue"]),
+    "optimized_overdue": float(cmp_fcfs["optimized_overdue"]),
+    "vs_promised_date_weighted_completion_improve_pct": float(cmp_prom["weighted_completion_improve_pct"]),
+}
+run_meta = {
+    "solver_status": result.status_name,
+    "objective_value": float(result.objective_value),
+    "optimized_makespan_slots": float(opt_makespan),
+    "n_work_orders": len(wo),
+    "n_schedule_rows": len(sched),
+    "slot_minutes": int(slot_mins),
+}
+_ctx = dm_assistant.build_assistant_context(
+    wo,
+    sched,
+    techs,
+    kpi_opt,
+    baseline_bundle,
+    float(result.horizon_slots),
+    scenario,
+    run_metadata=run_meta,
+)
+_gemini_key = dm_assistant.get_gemini_api_key()
+try:
+    _gemini_key = _gemini_key or str(st.secrets["GEMINI_API_KEY"])
+except (KeyError, FileNotFoundError, RuntimeError):
+    pass
+
+if "dm_assistant_messages" not in st.session_state:
+    st.session_state.dm_assistant_messages = []
+if "dm_assistant_dialog_open" not in st.session_state:
+    st.session_state.dm_assistant_dialog_open = False
+
+
+@st.dialog("Ask DockMaster AI Ops", width="large")
+def dockmaster_assistant_dialog() -> None:
+    st.markdown(
+        "The predictive model and optimizer produce **this** plan; the assistant answers using **all** live context "
+        "(KPIs, scored work orders, schedule, technician roster, baselines). "
+        "Follow-ups use recent chat history; facts always match the current sidebar run."
+    )
+    _hdr_l, _hdr_r = st.columns([4, 1])
+    with _hdr_r:
+        if st.button("Close", key="dm_close_assistant_dialog"):
+            st.session_state.dm_assistant_dialog_open = False
+            st.rerun()
+    c1, _ = st.columns([1, 5])
+    with c1:
+        if st.button("Clear chat", key="dm_clear_assistant_chat"):
+            st.session_state.dm_assistant_messages = []
+            st.rerun()
+
+    if not _gemini_key:
+        st.warning(
+            f"Add **`GEMINI_API_KEY`** to **`{ROOT / '.env'}`** (see `.env.example`) or Streamlit secrets."
+        )
+    else:
+        st.caption("Powered by Gemini · grounded on JSON from this run.")
+
+    for msg in st.session_state.dm_assistant_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if _gemini_key and (user_prompt := st.chat_input("Ask anything about the current plan…")):
+        prior = [dict(m) for m in st.session_state.dm_assistant_messages]
+        with st.spinner("Generating answer…"):
+            answer_text = dm_assistant.answer_question_from_context(
+                user_prompt,
+                _ctx,
+                _gemini_key,
+                chat_history=prior,
+            )
+        st.session_state.dm_assistant_messages.append({"role": "user", "content": user_prompt})
+        st.session_state.dm_assistant_messages.append({"role": "assistant", "content": answer_text})
+        st.rerun()
+
+    with st.expander("What data is sent to the model?"):
+        st.markdown(
+            "Each reply uses: **run_metadata**, **kpis**, **work_orders**, **schedule**, **technicians**, "
+            "**baseline_comparison**, **scenario**."
+        )
+        st.json(
+            {
+                "run_metadata": _ctx.get("run_metadata"),
+                "kpis": _ctx["kpis"],
+                "horizon_slots": _ctx["horizon_slots"],
+                "scenario": _ctx["scenario"],
+                "baseline_comparison": _ctx["baseline_comparison"],
+                "schedule_row_count": len(_ctx["schedule"]),
+                "work_order_count": len(_ctx["work_orders"]),
+                "technician_count": len(_ctx["technicians"]),
+            }
+        )
+
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Operations", "ROI vs baseline", "Risk & work orders", "Model quality", "Commercial"]
+    [
+        "Operations",
+        "ROI vs baseline",
+        "Risk & work orders",
+        "Model quality",
+        "Commercial",
+    ]
 )
 
 with tab1:
@@ -329,6 +440,40 @@ with tab5:
 **Scale:** Batch scoring on work-order save; re-optimize on schedule board “Optimize” or nightly; fits multi-tenant SaaS.
         """
     )
+
+# Floating assistant (bottom-right) — open from any tab
+st.markdown(
+    """
+<style>
+/* Streamlit adds st-key-{key} on the widget wrapper */
+div.st-key-dockmaster_fab {
+    position: fixed !important;
+    bottom: 1.25rem !important;
+    right: 1.25rem !important;
+    z-index: 99990 !important;
+}
+div.st-key-dockmaster_fab button {
+    border-radius: 999px !important;
+    min-width: 3.25rem !important;
+    min-height: 3.25rem !important;
+    font-size: 1.35rem !important;
+    padding: 0.35rem 0.65rem !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+if st.button(
+    "💬",
+    key="dockmaster_fab",
+    type="primary",
+    help="Ask DockMaster AI Ops (grounded on this run)",
+):
+    st.session_state.dm_assistant_dialog_open = True
+
+if st.session_state.get("dm_assistant_dialog_open"):
+    dockmaster_assistant_dialog()
 
 st.divider()
 st.caption(
