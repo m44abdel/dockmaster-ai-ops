@@ -1,2 +1,1 @@
-# System libs for LightGBM / OR-Tools on Streamlit Community Cloud (Debian-based)
 libgomp1
