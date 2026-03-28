@@ -20,7 +20,7 @@ ensure_dotenv_loaded(ROOT)
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from dockmaster_ai_ops.baselines import run_baseline
@@ -281,36 +281,60 @@ with tab1:
                     "hourly_cost",
                 ]
             ],
-            width=True,
+            use_container_width=True,
             hide_index=True,
         )
 
     st.subheader("Gantt — skill + bay matched")
     if len(sched):
-        fig = px.bar(
-            sched,
-            x="duration_slots",
-            y="assigned_technician",
-            base="start_slot",
-            orientation="h",
-            color="lateness_slots",
-            hover_data=[
-                "work_order_id",
-                "vessel_id",
-                "bay_type",
-                "scheduling_priority_score",
-                "start_slot",
-                "end_slot",
-            ],
-            color_continuous_scale="Redor",
+        sp = sched.copy()
+        sp["assigned_technician"] = sp["assigned_technician"].astype(str)
+        sp["duration_slots"] = pd.to_numeric(sp["duration_slots"], errors="coerce").fillna(1).astype(float)
+        sp["start_slot"] = pd.to_numeric(sp["start_slot"], errors="coerce").fillna(0).astype(float)
+        sp["lateness_slots"] = pd.to_numeric(sp["lateness_slots"], errors="coerce").fillna(0).astype(float)
+        sp["hover_label"] = (
+            sp["work_order_id"].astype(str)
+            + "<br>"
+            + sp["vessel_id"].astype(str)
+            + "<br>"
+            + sp["bay_type"].astype(str)
+            + " · priority "
+            + sp["scheduling_priority_score"].round(1).astype(str)
+            + "<br>slots "
+            + sp["start_slot"].astype(int).astype(str)
+            + "–"
+            + sp["end_slot"].astype(int).astype(str)
         )
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=sp["duration_slots"],
+                    y=sp["assigned_technician"],
+                    base=sp["start_slot"],
+                    orientation="h",
+                    marker=dict(
+                        color=sp["lateness_slots"],
+                        colorscale="Redor",
+                        showscale=True,
+                        colorbar=dict(title="Lateness (slots)"),
+                        line=dict(width=0.5, color="rgba(255,255,255,0.25)"),
+                    ),
+                    hovertext=sp["hover_label"],
+                    hoverinfo="text",
+                )
+            ]
+        )
+        tech_order = sorted(sp["assigned_technician"].unique())
         fig.update_layout(
-            height=340 + 38 * len(techs),
+            height=min(900, 340 + 38 * max(1, len(techs))),
             xaxis_title="Time slot index",
             yaxis_title="",
             barmode="overlay",
+            margin=dict(l=200, r=12, t=12, b=48),
+            yaxis=dict(categoryorder="array", categoryarray=tech_order, automargin=True),
+            uirevision="gantt",
         )
-        st.plotly_chart(fig, width=True)
+        st.plotly_chart(fig, use_container_width=True, theme="streamlit")
     else:
         st.info("No schedule.")
 
@@ -391,7 +415,7 @@ with tab3:
         "estimated_duration_h",
     ]
     show = wo[show_cols].sort_values("failure_risk", ascending=False)
-    st.dataframe(show, width=True, hide_index=True)
+    st.dataframe(show, use_container_width=True, hide_index=True)
 
     st.subheader("Proxy features → marina labels (model inputs)")
     st.table(
