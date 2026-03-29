@@ -472,7 +472,7 @@ st.markdown(
 /* Streamlit adds st-key-{key} on the widget wrapper */
 div.st-key-dockmaster_fab {
     position: fixed !important;
-    bottom: 1.25rem !important;
+    bottom: 3.25rem !important;
     right: 1.25rem !important;
     z-index: 99990 !important;
 }
