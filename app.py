@@ -6,6 +6,7 @@ Run: streamlit run app.py
 
 from __future__ import annotations
 
+import inspect
 import io
 import sys
 from pathlib import Path
@@ -161,7 +162,26 @@ if "dm_assistant_dialog_open" not in st.session_state:
     st.session_state.dm_assistant_dialog_open = False
 
 
-@st.dialog("Ask DockMaster AI Ops", width="large")
+def _on_assistant_dialog_dismiss() -> None:
+    """Sync session state when the user closes the modal (X, overlay, Esc).
+
+    Default dialog behavior does not rerun the app on dismiss, so
+    ``dm_assistant_dialog_open`` would stay True and the chat would reopen on the
+    next full rerun (e.g. sidebar change).
+    """
+    st.session_state["dm_assistant_dialog_open"] = False
+
+
+_dialog_kw: dict = {}
+_sig = inspect.signature(st.dialog)
+if "on_dismiss" in _sig.parameters:
+    _dialog_kw["on_dismiss"] = _on_assistant_dialog_dismiss
+elif "dismissible" in _sig.parameters:
+    # Older Streamlit: no X / outside-click dismiss; Close button still works.
+    _dialog_kw["dismissible"] = False
+
+
+@st.dialog("Ask DockMaster AI Ops", width="large", **_dialog_kw)
 def dockmaster_assistant_dialog() -> None:
     st.markdown(
         "The predictive model and optimizer produce **this** plan; the assistant answers using **all** live context "
